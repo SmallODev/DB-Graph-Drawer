@@ -27,24 +27,133 @@ export default function Canvas({ tables, updateTable, removeTable, connections, 
     const handleAutoLayout = (e) => {
         e.stopPropagation();
         setHistory(tables.map(t => ({ id: t.id, x: t.x, y: t.y })));
-        const adj = {}; const inDegree = {};
-        tables.forEach(t => { adj[t.id] = []; inDegree[t.id] = 0; });
-        connections.forEach(c => { if (adj[c.fromTable] && adj[c.toTable]) { adj[c.fromTable].push(c.toTable); inDegree[c.toTable] += 1; } });
-        const levels = {}; const visited = new Set();
-        let queue = tables.filter(t => inDegree[t.id] === 0).map(t => ({ id: t.id, depth: 0 }));
-        if (queue.length === 0 && tables.length > 0) queue.push({ id: tables[0].id, depth: 0 });
-        while (queue.length > 0) { const curr = queue.shift(); levels[curr.id] = Math.max(levels[curr.id] || 0, curr.depth); visited.add(curr.id); (adj[curr.id] || []).forEach(neighbor => { if (!visited.has(neighbor)) queue.push({ id: neighbor, depth: curr.depth + 1 }); }); }
-        tables.forEach(t => { if (!visited.has(t.id)) levels[t.id] = 0; });
+
+        // Build adjacency and compute levels (longest path layering)
+        const adj = {}; const radj = {}; const inDegree = {};
+        tables.forEach(t => { adj[t.id] = []; radj[t.id] = []; inDegree[t.id] = 0; });
+        (connections ?? []).forEach(c => {
+            if (adj[c.fromTable] && adj[c.toTable] && c.fromTable !== c.toTable) {
+                adj[c.fromTable].push(c.toTable);
+                radj[c.toTable].push(c.fromTable);
+                inDegree[c.toTable] += 1;
+            }
+        });
+
+        // Kahn's topological sort for level assignment
+        const levels = {};
+        let queue = tables.filter(t => inDegree[t.id] === 0).map(t => t.id);
+        if (queue.length === 0 && tables.length > 0) queue = [tables[0].id];
+        queue.forEach(id => { levels[id] = 0; });
+        const topoQueue = [...queue];
+        while (topoQueue.length > 0) {
+            const id = topoQueue.shift();
+            (adj[id] || []).forEach(nid => {
+                levels[nid] = Math.max(levels[nid] ?? 0, (levels[id] ?? 0) + 1);
+                inDegree[nid]--;
+                if (inDegree[nid] <= 0) topoQueue.push(nid);
+            });
+        }
+        tables.forEach(t => { if (levels[t.id] === undefined) levels[t.id] = 0; });
+
+        // Group by level
         const levelGroups = {};
-        Object.keys(levels).forEach(id => { const lvl = levels[id]; if (!levelGroups[lvl]) levelGroups[lvl] = []; levelGroups[lvl].push(id); });
-        Object.keys(levelGroups).forEach(lvl => { const x = 100 + parseInt(lvl) * 350; let currentY = 100; levelGroups[lvl].forEach(id => { updateTable(id, { x, y: currentY }); const table = tables.find(t => t.id === id); const tableHeight = table ? 37 + (table.columns.length * 30) : 100; currentY += tableHeight + 50; }); });
+        Object.keys(levels).forEach(id => {
+            const lvl = levels[id];
+            if (!levelGroups[lvl]) levelGroups[lvl] = [];
+            levelGroups[lvl].push(id);
+        });
+
+        // Barycenter crossing minimisation — sort nodes in each column by
+        // the average position (index) of their neighbours in the previous column
+        const sortedLevels = Object.keys(levelGroups).map(Number).sort((a, b) => a - b);
+        sortedLevels.forEach((lvl, li) => {
+            if (li === 0) return;
+            const prevGroup = levelGroups[sortedLevels[li - 1]];
+            const prevPos = {};
+            prevGroup.forEach((id, i) => { prevPos[id] = i; });
+            levelGroups[lvl].sort((a, b) => {
+                const parentsA = (radj[a] || []).map(p => prevPos[p] ?? 0);
+                const parentsB = (radj[b] || []).map(p => prevPos[p] ?? 0);
+                const avgA = parentsA.length ? parentsA.reduce((s, v) => s + v, 0) / parentsA.length : 0;
+                const avgB = parentsB.length ? parentsB.reduce((s, v) => s + v, 0) / parentsB.length : 0;
+                return avgA - avgB;
+            });
+        });
+
+        // Position tables — extra horizontal gap so orthogonal connectors have room
+        const COL_GAP = 380;
+        const ROW_GAP = 60;
+        sortedLevels.forEach(lvl => {
+            const x = 80 + lvl * COL_GAP;
+            let currentY = 80;
+            levelGroups[lvl].forEach(id => {
+                updateTable(id, { x, y: currentY });
+                const table = tables.find(t => t.id === id);
+                const tableHeight = table ? 37 + ((table.columns?.length ?? 0) * 30) : 100;
+                currentY += tableHeight + ROW_GAP;
+            });
+        });
     };
 
     const handleUndo = (e) => { e.stopPropagation(); if (!history) return; history.forEach(h => updateTable(h.id, { x: h.x, y: h.y })); setHistory(null); };
 
-    const getDotCoords = (tableId, colId, side) => { const table = tables.find(t => t.id === tableId); if (!table) return { x: 0, y: 0 }; const colIndex = table.columns.findIndex(c => c.id === colId); if (colIndex === -1) return { x: 0, y: 0 }; return { x: side === 'left' ? table.x : table.x + 220, y: table.y + 37 + (colIndex * 30) + 15 }; };
-    const getCurve = (x1, y1, side1, x2, y2, side2) => { const offset = Math.max(Math.abs(x2 - x1) * 0.5, 50); const c1x = side1 === 'right' ? x1 + offset : x1 - offset; const c2x = side2 === 'right' ? x2 + offset : x2 - offset; return `M ${x1} ${y1} C ${c1x} ${y1}, ${c2x} ${y2}, ${x2} ${y2}`; };
-    const getCurveMidpoint = (x1, y1, side1, x2, y2, side2) => { const offset = Math.max(Math.abs(x2 - x1) * 0.5, 50); const c1x = side1 === 'right' ? x1 + offset : x1 - offset; const c2x = side2 === 'right' ? x2 + offset : x2 - offset; return { x: 0.125 * x1 + 0.375 * c1x + 0.375 * c2x + 0.125 * x2, y: 0.5 * y1 + 0.5 * y2 }; };
+    const getDotCoords = (tableId, colId, side) => {
+        const table = tables.find(t => t.id === tableId);
+        if (!table) return { x: 0, y: 0 };
+        const colIndex = (table.columns ?? []).findIndex(c => c.id === colId);
+        if (colIndex === -1) return { x: 0, y: 0 };
+        return { x: side === 'left' ? table.x : table.x + 220, y: table.y + 37 + (colIndex * 30) + 15 };
+    };
+
+    // Orthogonal path: exit horizontally, jog vertically at midpoint, enter horizontally
+    // Uses SVG arc for rounded corners (r=8px)
+    const getOrthogonalPath = (x1, y1, side1, x2, y2, side2) => {
+        const r = 8; // corner radius
+        const stub = 24; // minimum horizontal stub before turning
+        const dx = x2 - x1;
+        // midX: halfway between the two stubs
+        const exit1 = side1 === 'right' ? x1 + stub : x1 - stub;
+        const exit2 = side2 === 'right' ? x2 + stub : x2 - stub;
+        const midX = (exit1 + exit2) / 2;
+
+        // Clamp corner radius so it never exceeds half the segment length
+        const hSeg = Math.abs(midX - exit1);
+        const vSeg = Math.abs(y2 - y1);
+        const rc = Math.min(r, hSeg / 2, vSeg / 2);
+
+        if (vSeg < 1) {
+            // Straight horizontal line — no jog needed
+            return `M ${x1} ${y1} L ${x2} ${y2}`;
+        }
+
+        // Direction helpers
+        const hDir1 = exit1 > x1 ? 1 : -1;   // +1 going right, -1 going left
+        const hDir2 = exit2 > midX ? 1 : -1;
+        const vDir = y2 > y1 ? 1 : -1;
+
+        // Corner arcs — sweep-flag encodes turn direction
+        // Turn 1: horizontal→vertical at (midX, y1)
+        const sf1 = (hDir1 > 0 && vDir > 0) || (hDir1 < 0 && vDir < 0) ? 1 : 0;
+        // Turn 2: vertical→horizontal at (midX, y2)
+        const sf2 = (vDir > 0 && hDir2 > 0) || (vDir < 0 && hDir2 < 0) ? 1 : 0;
+
+        return [
+            `M ${x1} ${y1}`,
+            `L ${midX - hDir1 * rc} ${y1}`,
+            `A ${rc} ${rc} 0 0 ${sf1} ${midX} ${y1 + vDir * rc}`,
+            `L ${midX} ${y2 - vDir * rc}`,
+            `A ${rc} ${rc} 0 0 ${sf2} ${midX + hDir2 * rc} ${y2}`,
+            `L ${x2} ${y2}`,
+        ].join(' ');
+    };
+
+    const getOrthogonalMidpoint = (x1, y1, side1, x2, y2) => {
+        const stub = 24;
+        const exit1 = side1 === 'right' ? x1 + stub : x1 - stub;
+        const exit2 = side1 === 'right' ? x2 - stub : x2 + stub;
+        const midX = (exit1 + exit2) / 2;
+        return { x: midX, y: (y1 + y2) / 2 };
+    };
 
     const connColor = dark ? '#4c4f7a' : '#94a3b8';
     const selectedColor = '#ef4444';
@@ -75,7 +184,7 @@ export default function Canvas({ tables, updateTable, removeTable, connections, 
                         <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill={connColor} /></marker>
                         <marker id="arrowhead-selected" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill={selectedColor} /></marker>
                     </defs>
-                    {connections.map(conn => {
+                    {(connections ?? []).map(conn => {
                         const fromTable = tables.find(t => t.id === conn.fromTable);
                         const toTable = tables.find(t => t.id === conn.toTable);
                         if (!fromTable || !toTable) return null;
@@ -85,11 +194,11 @@ export default function Canvas({ tables, updateTable, removeTable, connections, 
                         const start = getDotCoords(conn.fromTable, conn.fromCol, fromSide);
                         const end = getDotCoords(conn.toTable, conn.toCol, toSide);
                         const isSelected = selectedConnectionId === conn.id;
-                        const curveData = getCurve(start.x, start.y, fromSide, end.x, end.y, toSide);
+                        const pathData = getOrthogonalPath(start.x, start.y, fromSide, end.x, end.y, toSide);
                         return (
                             <g key={conn.id}>
-                                <path d={curveData} fill="none" stroke="transparent" strokeWidth="15" style={{ pointerEvents: 'stroke', cursor: 'pointer' }} onMouseDown={(e) => { e.stopPropagation(); setSelectedConnectionId(conn.id); }} />
-                                <path d={curveData} fill="none" stroke={isSelected ? selectedColor : connColor} strokeWidth={isSelected ? '2' : '1.5'} markerEnd={`url(#${isSelected ? 'arrowhead-selected' : 'arrowhead'})`} style={{ pointerEvents: 'none' }} />
+                                <path d={pathData} fill="none" stroke="transparent" strokeWidth="14" style={{ pointerEvents: 'stroke', cursor: 'pointer' }} onMouseDown={(e) => { e.stopPropagation(); setSelectedConnectionId(conn.id); }} />
+                                <path d={pathData} fill="none" stroke={isSelected ? selectedColor : connColor} strokeWidth={isSelected ? '2' : '1.5'} markerEnd={`url(#${isSelected ? 'arrowhead-selected' : 'arrowhead'})`} style={{ pointerEvents: 'none' }} />
                             </g>
                         );
                     })}
@@ -100,29 +209,28 @@ export default function Canvas({ tables, updateTable, removeTable, connections, 
                         const fromSide = fromIsLeft ? 'right' : 'left';
                         const toSide = fromIsLeft ? 'left' : 'right';
                         const start = getDotCoords(drawing.tableId, drawing.colId, fromSide);
-                        return <path d={getCurve(start.x, start.y, fromSide, mousePos.x, mousePos.y, toSide)} fill="none" stroke="#7c3aed" strokeWidth="1.5" strokeDasharray="6,4" />;
+                        return <path d={getOrthogonalPath(start.x, start.y, fromSide, mousePos.x, mousePos.y, toSide)} fill="none" stroke="#7c3aed" strokeWidth="1.5" strokeDasharray="6,4" />;
                     })()}
                 </svg>
 
                 <div style={{ pointerEvents: 'auto' }}>
-                    {connections.map(conn => {
+                    {(connections ?? []).map(conn => {
                         if (selectedConnectionId !== conn.id) return null;
                         const fromTable = tables.find(t => t.id === conn.fromTable);
                         const toTable = tables.find(t => t.id === conn.toTable);
                         if (!fromTable || !toTable) return null;
                         const fromIsLeft = fromTable.x < toTable.x;
                         const fromSide = fromIsLeft ? 'right' : 'left';
-                        const toSide = fromIsLeft ? 'left' : 'right';
                         const start = getDotCoords(conn.fromTable, conn.fromCol, fromSide);
-                        const end = getDotCoords(conn.toTable, conn.toCol, toSide);
-                        const mid = getCurveMidpoint(start.x, start.y, fromSide, end.x, end.y, toSide);
+                        const end = getDotCoords(conn.toTable, conn.toCol, fromIsLeft ? 'left' : 'right');
+                        const mid = getOrthogonalMidpoint(start.x, start.y, fromSide, end.x, end.y);
                         return (
                             <div key={`btn-${conn.id}`} className="absolute flex items-center justify-center w-5 h-5 bg-red-500 hover:bg-red-600 text-white rounded-full cursor-pointer z-50 shadow-md transition-colors" style={{ left: mid.x, top: mid.y, transform: 'translate(-50%, -50%)' }} onMouseDown={(e) => { e.stopPropagation(); setConnections(prev => prev.filter(c => c.id !== conn.id)); setSelectedConnectionId(null); }}>
                                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
                             </div>
                         );
                     })}
-                    {tables.map(table => <TableNode key={table.id} table={table} updateTable={updateTable} removeTable={removeTable} startConnection={startConnection} finishConnection={finishConnection} scale={transform.scale} dark={dark} isDrawing={!!drawing} />)}
+                    {(tables ?? []).map(table => <TableNode key={table.id} table={table} updateTable={updateTable} removeTable={removeTable} startConnection={startConnection} finishConnection={finishConnection} scale={transform.scale} dark={dark} isDrawing={!!drawing} />)}
                 </div>
             </div>
         </div>

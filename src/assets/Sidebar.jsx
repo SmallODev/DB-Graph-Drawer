@@ -20,7 +20,7 @@ function DatatypeSearch({ value, onChange, onEnterWhenClosed, dark }) {
     };
 
     return (
-        <div className="relative w-[38%]">
+        <div className="relative w-[72px] flex-shrink-0">
             <input value={query} onChange={(e) => { setQuery(e.target.value); setIsOpen(true); setHighlightedIndex(0); }} onKeyDown={handleKeyDown} onFocus={(e) => { setIsOpen(true); e.target.select(); }} onBlur={() => { setTimeout(() => setIsOpen(false), 150); onChange(query); }} className="w-full box-border bg-slate-100 dark:bg-[#0d0d16] border border-slate-200 dark:border-[#2a2a3d] rounded text-violet-600 dark:text-violet-400 px-1.5 py-0.5 text-[0.7rem] font-inherit outline-none focus:border-violet-400 dark:focus:border-violet-600 transition-colors" />
             {isOpen && filtered.length > 0 && (
                 <ul className="absolute top-full left-0 right-0 bg-white dark:bg-[#14141f] border border-slate-200 dark:border-[#2a2a3d] list-none p-0 m-0 max-h-[140px] overflow-y-auto z-[200] shadow-xl rounded-md">
@@ -35,8 +35,8 @@ function DatatypeSearch({ value, onChange, onEnterWhenClosed, dark }) {
     );
 }
 
-export default function Sidebar({ tables, updateTable, addTable, removeTable, removeColumn, graphName, setGraphName, saveGraph, loadGraph, deleteGraph, savedGraphs, loadSelection, setLoadSelection, dark, setDark }) {
-    const addColumn = (table) => { const newCol = { id: `c_${Math.random().toString(36).substring(2, 9)}`, name: 'new_column', type: 'varchar', isNew: true }; updateTable(table.id, { columns: [...table.columns, newCol] }); };
+export default function Sidebar({ tables, updateTable, addTable, removeTable, removeColumn, graphName, setGraphName, saveGraph, loadGraph, deleteGraph, savedGraphs, loadSelection, setLoadSelection, dark, setDark, exportSchema, importSchema, importRef, importError }) {
+    const addColumn = (table) => { const newCol = { id: `c_${Math.random().toString(36).substring(2, 9)}`, name: 'new_column', type: 'varchar', isNew: true }; updateTable(table.id, { columns: [...(table.columns ?? []), newCol] }); };
     const updateColumn = (table, colId, key, value) => { updateTable(table.id, { columns: table.columns.map(col => col.id === colId ? { ...col, [key]: value } : col) }); };
 
     return (
@@ -47,7 +47,7 @@ export default function Sidebar({ tables, updateTable, addTable, removeTable, re
                     <span className="font-semibold text-[0.8rem] text-slate-800 dark:text-slate-100 tracking-widest uppercase">Schema</span>
                     <span className="font-light text-[0.8rem] text-violet-500 tracking-widest uppercase">Builder</span>
                 </div>
-                <button onClick={() => setDark(!dark)} className={`relative w-11 h-5.5 rounded-full cursor-pointer border transition-all ${dark ? 'bg-violet-900/50 border-violet-700/50' : 'bg-slate-200 border-slate-300'}`} style={{ height: '22px' }}>
+                <button onClick={() => setDark(!dark)} className={`relative w-11 rounded-full cursor-pointer border transition-all ${dark ? 'bg-violet-900/50 border-violet-700/50' : 'bg-slate-200 border-slate-300'}`} style={{ height: '22px' }}>
                     <div className={`absolute top-[2px] w-[16px] h-[16px] rounded-full flex items-center justify-center text-[9px] transition-all duration-200 ${dark ? 'left-[24px] bg-violet-500' : 'left-[2px] bg-slate-400'}`}>{dark ? '🌙' : '☀'}</div>
                 </button>
             </div>
@@ -59,7 +59,7 @@ export default function Sidebar({ tables, updateTable, addTable, removeTable, re
                         <input value={graphName} onChange={(e) => setGraphName(e.target.value)} placeholder="schema name" className="flex-1 bg-slate-50 dark:bg-[#0d0d16] border border-slate-200 dark:border-[#2a2a3d] rounded-md text-slate-800 dark:text-slate-200 px-2 py-1.5 text-[0.72rem] font-inherit outline-none focus:border-violet-400 dark:focus:border-violet-600 transition-colors placeholder-slate-400 dark:placeholder-slate-600" />
                         <button onClick={saveGraph} className="bg-violet-600 hover:bg-violet-700 active:bg-violet-800 border-none rounded-md text-white px-3 py-1.5 text-[0.7rem] font-inherit cursor-pointer font-semibold tracking-wide transition-colors">Save</button>
                     </div>
-                    <div className="flex gap-1.5">
+                    <div className="flex gap-1.5 mb-2">
                         <select value={loadSelection} onChange={(e) => setLoadSelection(e.target.value)} className="flex-1 bg-slate-50 dark:bg-[#0d0d16] border border-slate-200 dark:border-[#2a2a3d] rounded-md text-slate-800 dark:text-slate-200 px-2 py-1.5 text-[0.72rem] font-inherit outline-none focus:border-violet-400 dark:focus:border-violet-600 transition-colors cursor-pointer">
                             <option value="">select schema...</option>
                             {savedGraphs.map(name => <option key={name} value={name}>{name}</option>)}
@@ -69,6 +69,20 @@ export default function Sidebar({ tables, updateTable, addTable, removeTable, re
                             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                         </button>
                     </div>
+
+                    {/* Export / Import row */}
+                    <div className="flex gap-1.5">
+                        <button onClick={exportSchema} className="flex-1 flex items-center justify-center gap-1.5 bg-slate-100 dark:bg-[#1a1a28] hover:bg-slate-200 dark:hover:bg-[#232336] border border-slate-200 dark:border-[#2a2a3d] rounded-md text-slate-600 dark:text-slate-300 px-2 py-1.5 text-[0.7rem] font-inherit cursor-pointer font-medium transition-colors">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                            Export
+                        </button>
+                        <button onClick={() => importRef.current?.click()} className="flex-1 flex items-center justify-center gap-1.5 bg-slate-100 dark:bg-[#1a1a28] hover:bg-slate-200 dark:hover:bg-[#232336] border border-slate-200 dark:border-[#2a2a3d] rounded-md text-slate-600 dark:text-slate-300 px-2 py-1.5 text-[0.7rem] font-inherit cursor-pointer font-medium transition-colors">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                            Import
+                        </button>
+                        <input ref={importRef} type="file" accept=".json,application/json" onChange={importSchema} className="hidden" />
+                    </div>
+                    {importError && <p className="text-[0.65rem] text-red-400 mt-1.5">{importError}</p>}
                 </div>
 
                 <div className="h-px bg-slate-200 dark:bg-[#1a1a2a]" />
@@ -113,9 +127,9 @@ function SidebarItem({ table, updateTable, removeTable, updateColumn, addColumn,
             </div>
             {!collapsed && (
                 <div className="p-2 space-y-1">
-                    {table.columns.map(col => (
+                    {(table.columns ?? []).map(col => (
                         <div key={col.id} className="flex gap-1.5 items-center">
-                            <input autoFocus={col.isNew || false} value={col.name} onChange={(e) => updateColumn(table, col.id, 'name', e.target.value)} onFocus={(e) => e.target.select()} className="flex-1 bg-slate-50 dark:bg-[#0d0d16] border border-slate-200 dark:border-[#2a2a3d] rounded text-slate-700 dark:text-slate-300 px-1.5 py-0.5 text-[0.7rem] font-inherit outline-none box-border focus:border-violet-400 dark:focus:border-violet-600 transition-colors" />
+                            <input autoFocus={col.isNew || false} value={col.name} onChange={(e) => updateColumn(table, col.id, 'name', e.target.value)} onFocus={(e) => e.target.select()} className="flex-1 min-w-0 bg-slate-50 dark:bg-[#0d0d16] border border-slate-200 dark:border-[#2a2a3d] rounded text-slate-700 dark:text-slate-300 px-1.5 py-0.5 text-[0.7rem] font-inherit outline-none box-border focus:border-violet-400 dark:focus:border-violet-600 transition-colors" />
                             <DatatypeSearch value={col.type} onChange={(val) => updateColumn(table, col.id, 'type', val)} onEnterWhenClosed={() => addColumn(table)} dark={dark} />
                             <button onClick={() => removeColumn(table.id, col.id)} className="text-red-400 hover:text-red-500 opacity-50 hover:opacity-100 bg-transparent border-none cursor-pointer p-0.5 flex items-center transition-all">
                                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
