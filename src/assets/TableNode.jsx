@@ -1,65 +1,129 @@
-import React, { useRef, useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import TableNode from './TableNode';
 
-export default function TableNode({ table, updateTable, removeTable, startConnection, finishConnection, scale, dark, isDrawing }) {
-    const draggingRef = useRef(false);
-    const offsetRef = useRef({ startX: 0, startY: 0, initialTableX: 0, initialTableY: 0 });
-    const [hoveredCol, setHoveredCol] = useState(null);
+export default function Canvas({ tables, updateTable, removeTable, connections, setConnections, dark }) {
+    const [drawing, setDrawing] = useState(null);
+    const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+    const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
+    const [isPanning, setIsPanning] = useState(false);
+    const [history, setHistory] = useState(null);
+    const [selectedConnectionId, setSelectedConnectionId] = useState(null);
+    const panRef = useRef({ startX: 0, startY: 0, initTx: 0, initTy: 0 });
 
-    const handleMouseDown = (e) => {
-        if (e.button === 1) return;
+    useEffect(() => {
+        const handleKeyDown = (e) => { if ((e.key === 'Delete' || e.key === 'Backspace') && selectedConnectionId) { setConnections(prev => prev.filter(c => c.id !== selectedConnectionId)); setSelectedConnectionId(null); } };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [selectedConnectionId, setConnections]);
+
+    const handleMouseDown = (e) => { setSelectedConnectionId(null); if (e.button === 1) { e.preventDefault(); setIsPanning(true); panRef.current = { startX: e.clientX, startY: e.clientY, initTx: transform.x, initTy: transform.y }; } };
+    const handleMouseMove = (e) => { if (isPanning) setTransform(prev => ({ ...prev, x: panRef.current.initTx + (e.clientX - panRef.current.startX), y: panRef.current.initTy + (e.clientY - panRef.current.startY) })); if (drawing) { const rect = e.currentTarget.getBoundingClientRect(); setMousePos({ x: (e.clientX - rect.left - transform.x) / transform.scale, y: (e.clientY - rect.top - transform.y) / transform.scale }); } };
+    const handleMouseUp = (e) => { if (e.button === 1) setIsPanning(false); setDrawing(null); };
+    const handleWheel = (e) => { const delta = -e.deltaY * 0.001; let newScale = Math.max(0.1, Math.min(transform.scale * Math.exp(delta), 5)); const rect = e.currentTarget.getBoundingClientRect(); const mouseX = e.clientX - rect.left; const mouseY = e.clientY - rect.top; setTransform({ x: mouseX - (mouseX - transform.x) * (newScale / transform.scale), y: mouseY - (mouseY - transform.y) * (newScale / transform.scale), scale: newScale }); };
+
+    const startConnection = (tableId, colId, side, e) => { e.stopPropagation(); const rect = e.target.closest('#canvas-container').getBoundingClientRect(); setDrawing({ tableId, colId, side, startX: (e.clientX - rect.left - transform.x) / transform.scale, startY: (e.clientY - rect.top - transform.y) / transform.scale }); };
+    const finishConnection = (tableId, colId, side, e) => { e.stopPropagation(); if (drawing && (drawing.tableId !== tableId || drawing.colId !== colId)) setConnections(prev => [...prev, { id: `conn_${Math.random().toString(36).substring(2, 9)}`, fromTable: drawing.tableId, fromCol: drawing.colId, fromSide: 'auto', toTable: tableId, toCol: colId, toSide: 'auto' }]); setDrawing(null); };
+
+    const handleAutoLayout = (e) => {
         e.stopPropagation();
-        draggingRef.current = true;
-        offsetRef.current = { startX: e.clientX, startY: e.clientY, initialTableX: table.x, initialTableY: table.y };
-        window.addEventListener('mousemove', handleMouseMove);
-        window.addEventListener('mouseup', handleMouseUp);
+        setHistory(tables.map(t => ({ id: t.id, x: t.x, y: t.y })));
+        const adj = {}; const inDegree = {};
+        tables.forEach(t => { adj[t.id] = []; inDegree[t.id] = 0; });
+        connections.forEach(c => { if (adj[c.fromTable] && adj[c.toTable]) { adj[c.fromTable].push(c.toTable); inDegree[c.toTable] += 1; } });
+        const levels = {}; const visited = new Set();
+        let queue = tables.filter(t => inDegree[t.id] === 0).map(t => ({ id: t.id, depth: 0 }));
+        if (queue.length === 0 && tables.length > 0) queue.push({ id: tables[0].id, depth: 0 });
+        while (queue.length > 0) { const curr = queue.shift(); levels[curr.id] = Math.max(levels[curr.id] || 0, curr.depth); visited.add(curr.id); (adj[curr.id] || []).forEach(neighbor => { if (!visited.has(neighbor)) queue.push({ id: neighbor, depth: curr.depth + 1 }); }); }
+        tables.forEach(t => { if (!visited.has(t.id)) levels[t.id] = 0; });
+        const levelGroups = {};
+        Object.keys(levels).forEach(id => { const lvl = levels[id]; if (!levelGroups[lvl]) levelGroups[lvl] = []; levelGroups[lvl].push(id); });
+        Object.keys(levelGroups).forEach(lvl => { const x = 100 + parseInt(lvl) * 350; let currentY = 100; levelGroups[lvl].forEach(id => { updateTable(id, { x, y: currentY }); const table = tables.find(t => t.id === id); const tableHeight = table ? 37 + (table.columns.length * 30) : 100; currentY += tableHeight + 50; }); });
     };
 
-    const handleMouseMove = (e) => {
-        if (draggingRef.current) {
-            const dx = (e.clientX - offsetRef.current.startX) / scale;
-            const dy = (e.clientY - offsetRef.current.startY) / scale;
-            updateTable(table.id, { x: offsetRef.current.initialTableX + dx, y: offsetRef.current.initialTableY + dy });
-        }
-    };
+    const handleUndo = (e) => { e.stopPropagation(); if (!history) return; history.forEach(h => updateTable(h.id, { x: h.x, y: h.y })); setHistory(null); };
 
-    const handleMouseUp = () => {
-        draggingRef.current = false;
-        window.removeEventListener('mousemove', handleMouseMove);
-        window.removeEventListener('mouseup', handleMouseUp);
-    };
+    const getDotCoords = (tableId, colId, side) => { const table = tables.find(t => t.id === tableId); if (!table) return { x: 0, y: 0 }; const colIndex = table.columns.findIndex(c => c.id === colId); if (colIndex === -1) return { x: 0, y: 0 }; return { x: side === 'left' ? table.x : table.x + 220, y: table.y + 37 + (colIndex * 30) + 15 }; };
+    const getCurve = (x1, y1, side1, x2, y2, side2) => { const offset = Math.max(Math.abs(x2 - x1) * 0.5, 50); const c1x = side1 === 'right' ? x1 + offset : x1 - offset; const c2x = side2 === 'right' ? x2 + offset : x2 - offset; return `M ${x1} ${y1} C ${c1x} ${y1}, ${c2x} ${y2}, ${x2} ${y2}`; };
+    const getCurveMidpoint = (x1, y1, side1, x2, y2, side2) => { const offset = Math.max(Math.abs(x2 - x1) * 0.5, 50); const c1x = side1 === 'right' ? x1 + offset : x1 - offset; const c2x = side2 === 'right' ? x2 + offset : x2 - offset; return { x: 0.125 * x1 + 0.375 * c1x + 0.375 * c2x + 0.125 * x2, y: 0.5 * y1 + 0.5 * y2 }; };
 
-    const headerBg = dark ? `${table.color}22` : `${table.color}33`;
+    const connColor = dark ? '#4c4f7a' : '#94a3b8';
+    const selectedColor = '#ef4444';
+    const dotColor = dark ? 'rgba(99,102,241,0.2)' : 'rgba(148,163,184,0.35)';
 
     return (
-        <div className="absolute w-[220px] rounded-md border border-slate-200 dark:border-[#2d2d3f] bg-white dark:bg-[#0d0d14] shadow-[0_4px_12px_rgba(0,0,0,0.05)] dark:shadow-[0_8px_24px_rgba(0,0,0,0.4)] select-none z-10 text-slate-800 dark:text-slate-200 overflow-hidden font-inherit" style={{ left: table.x, top: table.y }}>
-            <div onMouseDown={handleMouseDown} className="px-3 font-semibold text-xs border-b border-slate-200 dark:border-[#2d2d3f] cursor-grab h-[37px] flex items-center justify-between box-border" style={{ backgroundColor: headerBg, borderTop: `3px solid ${table.color}` }}>
-                <span>{table.name}</span>
-                <button onMouseDown={(e) => e.stopPropagation()} onClick={() => removeTable(table.id)} className="text-slate-400 hover:text-red-500 transition-colors flex items-center justify-center">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+        <div id="canvas-container" onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onWheel={handleWheel} onMouseLeave={() => setIsPanning(false)} tabIndex={0} className={`flex-1 relative overflow-hidden outline-none ${isPanning ? 'cursor-grabbing' : 'cursor-default'} ${dark ? 'bg-[#09090f]' : 'bg-slate-100'}`}>
+            <div className="absolute inset-0 pointer-events-none" style={{ backgroundImage: `radial-gradient(${dotColor} 1.5px, transparent 1.5px)`, backgroundSize: `${24 * transform.scale}px ${24 * transform.scale}px`, backgroundPosition: `${transform.x}px ${transform.y}px` }} />
+
+            <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-2.5 z-10">
+                {history && (
+                    <button onMouseDown={handleUndo} title="Undo Layout" className="w-9 h-9 rounded-full flex items-center justify-center bg-white dark:bg-[#14141f] border border-slate-200 dark:border-[#2a2a3d] text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-[#1e1e2e] shadow-lg transition-all hover:scale-105">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
+                    </button>
+                )}
+                <button onMouseDown={handleAutoLayout} title="Auto Layout" className="w-11 h-11 rounded-full flex items-center justify-center bg-violet-600 hover:bg-violet-700 active:bg-violet-800 text-white shadow-lg shadow-violet-500/30 transition-all hover:scale-105">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
                 </button>
             </div>
-            <div className="p-0">
-                {table.columns.map((col, index) => {
-                    const isHovered = isDrawing && hoveredCol === col.id;
-                    const bgClass = isHovered
-                        ? 'bg-purple-100 dark:bg-[#2d2d44]'
-                        : (index % 2 === 0 ? 'bg-transparent' : 'bg-slate-50 dark:bg-[#151520]');
 
-                    return (
-                        <div
-                            key={col.id}
-                            onMouseUp={(e) => finishConnection(table.id, col.id, 'auto', e)}
-                            onMouseEnter={() => setHoveredCol(col.id)}
-                            onMouseLeave={() => setHoveredCol(null)}
-                            className={`relative flex justify-between items-center px-3 h-[30px] box-border text-[0.72rem] transition-colors duration-75 ${bgClass}`}
-                        >
-                            <div onMouseDown={(e) => startConnection(table.id, col.id, 'auto', e)} className="absolute flex items-center justify-center w-8 h-8 cursor-crosshair top-1/2 -translate-y-1/2 pointer-events-auto -left-4 z-20"><div className="w-2.5 h-2.5 rounded-full bg-white dark:bg-[#0d0d14] border-2 border-slate-400 dark:border-[#4c4f7a] box-border" /></div>
-                            <span className="font-medium pointer-events-none">{col.name}</span>
-                            <span className="text-slate-500 dark:text-slate-400 pointer-events-none">{col.type}</span>
-                            <div onMouseDown={(e) => startConnection(table.id, col.id, 'auto', e)} className="absolute flex items-center justify-center w-8 h-8 cursor-crosshair top-1/2 -translate-y-1/2 pointer-events-auto -right-4 z-20"><div className="w-2.5 h-2.5 rounded-full bg-white dark:bg-[#0d0d14] border-2 border-slate-400 dark:border-[#4c4f7a] box-border" /></div>
-                        </div>
-                    );
-                })}
+            <div className="absolute bottom-4 right-4 px-2 py-0.5 text-[0.65rem] tracking-wider rounded-md font-inherit z-10 border border-slate-200 dark:border-[#2a2a3d] bg-white/80 dark:bg-[#14141f]/80 text-slate-400 dark:text-slate-500 backdrop-blur-sm">
+                {Math.round(transform.scale * 100)}%
+            </div>
+
+            <div style={{ position: 'absolute', transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`, transformOrigin: '0 0', width: '100%', height: '100%', pointerEvents: 'none' }}>
+                <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', overflow: 'visible', zIndex: 0 }}>
+                    <defs>
+                        <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill={connColor} /></marker>
+                        <marker id="arrowhead-selected" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill={selectedColor} /></marker>
+                    </defs>
+                    {connections.map(conn => {
+                        const fromTable = tables.find(t => t.id === conn.fromTable);
+                        const toTable = tables.find(t => t.id === conn.toTable);
+                        if (!fromTable || !toTable) return null;
+                        const fromIsLeft = fromTable.x < toTable.x;
+                        const fromSide = fromIsLeft ? 'right' : 'left';
+                        const toSide = fromIsLeft ? 'left' : 'right';
+                        const start = getDotCoords(conn.fromTable, conn.fromCol, fromSide);
+                        const end = getDotCoords(conn.toTable, conn.toCol, toSide);
+                        const isSelected = selectedConnectionId === conn.id;
+                        const curveData = getCurve(start.x, start.y, fromSide, end.x, end.y, toSide);
+                        return (
+                            <g key={conn.id}>
+                                <path d={curveData} fill="none" stroke="transparent" strokeWidth="15" style={{ pointerEvents: 'stroke', cursor: 'pointer' }} onMouseDown={(e) => { e.stopPropagation(); setSelectedConnectionId(conn.id); }} />
+                                <path d={curveData} fill="none" stroke={isSelected ? selectedColor : connColor} strokeWidth={isSelected ? '2' : '1.5'} markerEnd={`url(#${isSelected ? 'arrowhead-selected' : 'arrowhead'})`} style={{ pointerEvents: 'none' }} />
+                            </g>
+                        );
+                    })}
+                    {drawing && (() => {
+                        const fromTable = tables.find(t => t.id === drawing.tableId);
+                        if (!fromTable) return null;
+                        const fromIsLeft = fromTable.x + 110 < mousePos.x;
+                        const fromSide = fromIsLeft ? 'right' : 'left';
+                        const toSide = fromIsLeft ? 'left' : 'right';
+                        const start = getDotCoords(drawing.tableId, drawing.colId, fromSide);
+                        return <path d={getCurve(start.x, start.y, fromSide, mousePos.x, mousePos.y, toSide)} fill="none" stroke="#7c3aed" strokeWidth="1.5" strokeDasharray="6,4" />;
+                    })()}
+                </svg>
+
+                <div style={{ pointerEvents: 'auto' }}>
+                    {connections.map(conn => {
+                        if (selectedConnectionId !== conn.id) return null;
+                        const fromTable = tables.find(t => t.id === conn.fromTable);
+                        const toTable = tables.find(t => t.id === conn.toTable);
+                        if (!fromTable || !toTable) return null;
+                        const fromIsLeft = fromTable.x < toTable.x;
+                        const fromSide = fromIsLeft ? 'right' : 'left';
+                        const toSide = fromIsLeft ? 'left' : 'right';
+                        const start = getDotCoords(conn.fromTable, conn.fromCol, fromSide);
+                        const end = getDotCoords(conn.toTable, conn.toCol, toSide);
+                        const mid = getCurveMidpoint(start.x, start.y, fromSide, end.x, end.y, toSide);
+                        return (
+                            <div key={`btn-${conn.id}`} className="absolute flex items-center justify-center w-5 h-5 bg-red-500 hover:bg-red-600 text-white rounded-full cursor-pointer z-50 shadow-md transition-colors" style={{ left: mid.x, top: mid.y, transform: 'translate(-50%, -50%)' }} onMouseDown={(e) => { e.stopPropagation(); setConnections(prev => prev.filter(c => c.id !== conn.id)); setSelectedConnectionId(null); }}>
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                            </div>
+                        );
+                    })}
+                    {tables.map(table => <TableNode key={table.id} table={table} updateTable={updateTable} removeTable={removeTable} startConnection={startConnection} finishConnection={finishConnection} scale={transform.scale} dark={dark} isDrawing={!!drawing} />)}
+                </div>
             </div>
         </div>
     );
